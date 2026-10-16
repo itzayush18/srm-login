@@ -32,9 +32,8 @@ Before getting started, make sure you have:
    ```
 
 2. **Install dependencies**:
-   Install Playwright:
    ```bash
-   npm install playwright
+   npm install
    ```
 
 3. **Install Chromium browser binary**:
