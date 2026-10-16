@@ -11,7 +11,10 @@
     "url": "git+https://github.com/itzayush18/srm-login.git"
   },
   "keywords": [],
-  "type": "commonjs",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.64.1"
+  },
   "bugs": {
     "url": "https://github.com/itzayush18/srm-login/issues"
   },
