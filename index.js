@@ -1,105 +1,126 @@
+
 import { chromium } from "playwright";
 
-const username = process.argv[2];
-const password = process.argv[3];
+const PORTAL_URL = "https://iac.srmist.edu.in/Connect/PortalMain";
 
-const LOGIN_URL =
-  "https://iac.srmist.edu.in/Connect/PortalMain";
+const INTERNET_CHECK_URL = "https://example.com";
 
-const USERNAME_SELECTOR =
-  "#LoginUserPassword_auth_username";
+const USERNAME_SELECTOR ="#LoginUserPassword_auth_username";
 
-const PASSWORD_SELECTOR =
-  "#LoginUserPassword_auth_password";
+const PASSWORD_SELECTOR = "#LoginUserPassword_auth_password";
 
 const SUCCESS_TEXT = "Network Access Granted";
 
+const username = process.env.SRM_USERNAME || process.argv[2];
+const password = process.env.SRM_PASSWORD || process.argv[3];
+
+async function hasInternet() {
+    try {
+        const response = await fetch(INTERNET_CHECK_URL, {
+            method: "HEAD",
+            redirect: "manual",
+            signal: AbortSignal.timeout(8000),
+        });
+
+        return response.status >= 200 && response.status < 300;
+    } catch {
+        return false;
+    }
+}
+
+async function waitForInternet(attempts = 5) {
+    for (let i = 0; i < attempts; i++) {
+        if (await hasInternet()) return true;
+
+        if (i < attempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    return false;
+}
+
 async function main() {
-  const browser = await chromium.launch({
-    headless: true,
-  });
+    console.log("Checking internet connectivity...");
 
-  try {
-    // Explicit context keeps the session isolated from other browsers.
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
-    await page.goto(LOGIN_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-
-    await page.waitForTimeout(1500);
-
-    let text = await page.locator("body").innerText();
-
-    // Check the current portal state BEFORE attempting login.
-    if (text.includes(SUCCESS_TEXT)) {
-      console.log("Already authenticated.");
-      console.log(
-        text.trim().slice(0, 1500)
-      );
-      return;
+    if (await hasInternet()) {
+        console.log("Internet access already working. Skipping login.");
+        return;
     }
 
-    const usernameField = page.locator(USERNAME_SELECTOR);
-    const passwordField = page.locator(PASSWORD_SELECTOR);
+    console.log("Internet unavailable. Opening SRM portal...");
 
-    const loginFormVisible = await usernameField
-      .isVisible()
-      .catch(() => false);
-
-    if (!loginFormVisible) {
-      console.error("Unknown portal state.");
-      console.log("URL:", page.url());
-      console.log("Title:", await page.title());
-      console.log("HTML:\n", await page.content());
-      process.exitCode = 1;
-      return;
-    }
-
-    // Do not attempt authentication with missing credentials.
     if (!username || !password) {
-      console.error(
-        'Login required. Run: node index.js "<username>" "<password>"'
-      );
-      process.exitCode = 1;
-      return;
+        throw new Error(
+            "Credentials required. Set SRM_USERNAME and SRM_PASSWORD, " +
+            'or run node main.js "<username>" "<password>".'
+        );
     }
 
-    console.log("Login required. Submitting credentials.");
+    const browser = await chromium.launch({ headless: true });
 
-    await usernameField.fill(username);
-    await passwordField.fill(password);
+    try {
+        // Temporary context: no persistent profile or saved cookies.
+        const context = await browser.newContext();
+        const page = await context.newPage();
 
-    await page.evaluate(() => {
-      if (
-        typeof oAuthentication === "undefined" ||
-        typeof oAuthentication.submitActiveForm !== "function"
-      ) {
-        throw new Error("Login handler not found.");
-      }
+        page.setDefaultTimeout(15000);
 
-      oAuthentication.submitActiveForm();
-    });
+        await page.goto(PORTAL_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+        });
 
-    await page.waitForTimeout(4000);
+        const usernameField = page.locator(USERNAME_SELECTOR);
+        const passwordField = page.locator(PASSWORD_SELECTOR);
 
-    text = await page.locator("body").innerText();
+        if (!(await usernameField.isVisible().catch(() => false))) {
+            throw new Error("SRM login form not found.");
+        }
 
-    if (text.includes(SUCCESS_TEXT)) {
-      console.log("Portal reports network access granted.");
-    } else {
-      console.error("Authentication not confirmed.");
-      console.log("Portal response:\n", text.slice(0, 2000));
-      process.exitCode = 1;
+        console.log("Submitting credentials...");
+
+        await usernameField.fill(username);
+        await passwordField.fill(password);
+
+        await page.evaluate(() => {
+            if (
+                typeof oAuthentication === "undefined" ||
+                typeof oAuthentication.submitActiveForm !== "function"
+            ) {
+                throw new Error("SRM authentication handler not found.");
+            }
+
+            oAuthentication.submitActiveForm();
+        });
+
+        await page.waitForTimeout(5000);
+
+        const bodyText = await page.locator("body").innerText().catch(() => "");
+
+        if (bodyText.includes(SUCCESS_TEXT)) {
+            console.log("Portal reports: Network Access Granted.");
+        } else {
+            console.log("Portal did not show the expected success message.");
+        }
+
+        console.log("Checking internet access again...");
+
+        if (await waitForInternet()) {
+            console.log("Internet access confirmed.");
+        } else {
+            throw new Error(
+                "Internet remains unavailable after login. Check the portal response."
+            );
+        }
+
+        await context.close();
+    } finally {
+        await browser.close();
     }
-  } finally {
-    await browser.close();
-  }
 }
 
 main().catch((error) => {
-  console.error("Error:", error.message);
-  process.exitCode = 1;
+    console.error("Error:", error.message);
+    process.exitCode = 1;
 });
